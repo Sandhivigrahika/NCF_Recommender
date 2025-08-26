@@ -1,0 +1,14 @@
+#Environment Variables
+.env
+/.ipynb_checkpoints/
+/ml-1m/
+/model/test-tmdb_file.py
+/model/error log
+/users.dat
+/data/
+/ml-1m.zip
+/ml-1m-Copy1.zip
+/movies.dat
+/ratings.dat
+/README
+/Readme.txt
