@@ -1,5 +1,3 @@
-import streamlit as st
-import requests
 
 
 
@@ -7,7 +5,6 @@ import requests
 import requests
 import ssl
 from requests.adapters import HTTPAdapter
-from urllib3.util.ssl_ import create_urllib3_context
 from urllib3.util import Retry
 
 import os
@@ -16,6 +13,7 @@ from dotenv import load_dotenv
 load_dotenv()  # loads all variables from .env
 
 API_KEY = os.getenv("TMDB_API_KEY")
+HF_TOKEN = os.getenv("HF_TOKEN")
 
 class TLS12Adapter(HTTPAdapter):
     def init_poolmanager(self, *args, **kwargs):
@@ -46,7 +44,7 @@ session.mount("http://", adapter)
 #####Generate AI Summary, in case TMDB summary not available
 
 API_URL = "https://api-inference.huggingface.co/models/facebook/bart-large-cnn"
-headers = {"Authorization": f"Bearer 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"}  # replace with your token
+headers = {"Authorization": f"Bearer {HF_TOKEN}"}  # replace with your token
 
 
 def hf_summary(text: str, max_len=80, min_len=30) -> str:
