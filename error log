@@ -1,0 +1,2 @@
+1. Tensorflow support for python3.12(current version) is limited, pip install tensor flow
+might not work properly. tf-nightly installed instead.
