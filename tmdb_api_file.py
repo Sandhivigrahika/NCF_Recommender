@@ -6,14 +6,24 @@ import requests
 import ssl
 from requests.adapters import HTTPAdapter
 from urllib3.util import Retry
+import streamlit as st
 
 import os
 from dotenv import load_dotenv
 
 load_dotenv()  # loads all variables from .env
 
-API_KEY = os.getenv("TMDB_API_KEY")
-HF_TOKEN = os.getenv("HF_TOKEN")
+def get_secrets(name, default=None): #to handle api and tokens
+    """Get secret from streamlit cloud or locally"""
+    try:
+        return st.secrets[name] #for st cloud
+    except Exception:
+        return os.getenv(name,default) #works locally
+
+
+# Use it for your keys
+hf_token = get_secrets("HF_TOKEN")
+tmdb_key = get_secrets("TMDB_API_KEY")
 
 class TLS12Adapter(HTTPAdapter):
     def init_poolmanager(self, *args, **kwargs):
@@ -25,7 +35,7 @@ class TLS12Adapter(HTTPAdapter):
 
 
 url = "https://api.themoviedb.org/3/search/movie"
-params = {"api_key": API_KEY, "query": "Inception"}
+params = {"api_key": tmdb_key, "query": "Inception"}
 
 
 #######################################################
@@ -44,7 +54,7 @@ session.mount("http://", adapter)
 #####Generate AI Summary, in case TMDB summary not available
 
 API_URL = "https://api-inference.huggingface.co/models/facebook/bart-large-cnn"
-headers = {"Authorization": f"Bearer {HF_TOKEN}"}  # replace with your token
+headers = {"Authorization": f"Bearer {hf_token}"}  # replace with your token
 
 
 def hf_summary(text: str, max_len=80, min_len=30) -> str:
@@ -71,7 +81,7 @@ PLACEHOLDER_IMAGE = "https://via.placeholder.com/500x750.png?text=No+Image"
 
 def get_movie_details(movie_title):
     url = "https://api.themoviedb.org/3/search/movie"
-    params = {"api_key": API_KEY, "query": movie_title}
+    params = {"api_key": tmdb_key , "query": movie_title}
 
     try:
         raw_response = session.get(url, params=params, timeout=10)  #  timeout added
