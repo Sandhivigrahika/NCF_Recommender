@@ -148,10 +148,19 @@ def rate(req: RateRequest, db: Session = Depends(get_db)):
     Submit a rating from a new user.
     Once a user submits 20+ ratings, ready_for_rec = True.
     The retraining pipeline picks these up automatically.
+
+
+    RateRequest ->
+    class RateRequest(BaseModel):
+    user_id:  str   = Field(..., examples=["new_user_abc123"])
+    movie_id: int   = Field(..., examples=[1])
+    score:    float = Field(..., ge=1.0, le=5.0, description="Rating between 1.0 and 5.0")
+
+
     """
 
     user_id_normalised = req.user_id.strip().lower()
-    rating = Rating(user_id=req.user_id_normalised, movie_id=req.movie_id, score=req.score)
+    rating = Rating(user_id=user_id_normalised, movie_id=req.movie_id, score=req.score)
     db.add(rating)
     db.commit()
 
@@ -160,7 +169,7 @@ def rate(req: RateRequest, db: Session = Depends(get_db)):
     return RateResponse(
         message="Rating saved.",
         ratings_count=count,
-        ready_for_rec=count >= 5,
+        ready_for_rec=count >= 20,
     )
 
 

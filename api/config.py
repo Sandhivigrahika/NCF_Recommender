@@ -33,6 +33,6 @@ DATABASE_URL = f"sqlite:///{BASE_DIR}/ratings.db"
 TMDB_API_KEY = os.getenv("TMDB_API_KEY", "")
 
 # Retraining
-MIN_NEW_RATINGS_TO_RETRAIN = 10   # trigger retrain after this many new ratings
+MIN_NEW_RATINGS_TO_RETRAIN = 20   # trigger retrain after this many new ratings
 RETRAIN_EPOCHS             = 3    # fine-tune epochs (keep small for speed)
 RETRAIN_LEARNING_RATE      = 1e-4

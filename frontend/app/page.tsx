@@ -248,10 +248,20 @@ export default function Home() {
                       {session.is_new ? "Welcome! Rate 5 movies to train your personalised model." : "Welcome back! Rate more movies to improve your recommendations."}
                     </p>
                   </div>
-                  <div style={{ marginLeft: "auto", textAlign: "right" }}>
-                    <p style={{ color: "#52525b", fontSize: "0.7rem", margin: 0 }}>Internal ID</p>
-                    <p style={{ color: "#34d399", fontWeight: 600, fontSize: "0.875rem", margin: 0 }}>#{session.internal_id}</p>
-                  </div>
+                  <div style={{ marginLeft: "auto", display: "flex", gap: "8px", alignItems: "center" }}>
+                <button
+                  onClick={() => { setSession(null); setNewUserMovies([]); setShowRegister(true); }}
+                  style={{ background: "none", border: "0.5px solid #3f3f46", borderRadius: "6px", color: "#71717a", fontSize: "0.7rem", padding: "4px 10px", cursor: "pointer" }}
+                >
+                  Clear session
+                </button>
+                <button
+                  onClick={() => setTab("discover")}
+                  style={{ background: "none", border: "0.5px solid #3f3f46", borderRadius: "6px", color: "#71717a", fontSize: "0.7rem", padding: "4px 10px", cursor: "pointer" }}
+                >
+                  ✕ Close
+                </button>
+                </div>
                 </div>
 
                 {/* Rating flow */}

@@ -170,11 +170,14 @@ def compute_metrics(k: int = 10, sample_users: int = 200) -> dict:
 
     Returns hit@k, ndcg@k, k, test_users.
     """
-    all_users = list(_user2id.keys())
+    all_users = list(_user2id.keys()) #{ user_id: 0, user_id: 1 },
     all_movie_ids = list(_movie2id.values())
     all_raw_ids = list(_movie2id.keys())
 
-    all_users = [u for u in _user2id.keys() if isinstance(u, int)]
+    all_users = [u for u in _user2id.keys() if isinstance(u, (int, np.integer))]
+    '''user2id.pkl was built in the notebook where pandas/numpy operations produce int64 keys, 
+    not plain Python int. So every key failed the isinstance(u, int) check and all_users came back empty — zero users sampled, 
+    zero evaluated, np.mean([]) returned nan, FastAPI serialised it as null.'''
     sampled = np.random.choice(all_users, size=min(sample_users, len(all_users)), replace=False)
 
     hits, ndcgs = [], []
@@ -291,7 +294,7 @@ def compute_metrics(k: int = 10, sample_users: int = 200) -> dict:
             ndcgs = [0.63, 0.0, 1.0, 0.5, ...]  ← one score per user
             np.mean(ndcgs) gives the final ndcg@k
         '''
-
+    logger.info("Metrics computed: %d users evaluated out of %d sampled", len(hits), len(sampled))
 
     return {
         "hit_at_k": round(float(np.mean(hits)), 4), #np.mean(hits) (1+0+1+1+0+0+1...) / 200 = 0.42
@@ -322,6 +325,7 @@ def retrain_model(new_ratings: list[dict]) -> dict:
     """
         Retrain the model on binary ratings from a single registered user session.
         new_ratings: list of {"user_id": str, "movie_id": int, "score": int}
+                            {"user_id": "2", "movie_id": 345, "score": 0/1}
         score is 0 or 1 — no normalisation needed.
         """
     global _model
@@ -339,7 +343,7 @@ def retrain_model(new_ratings: list[dict]) -> dict:
         #lookup the internal id assigned during registration
         # don't create a new one here = register_user already did that
 
-        internal_uid = _name_to_internal_id(user_name)
+        internal_uid = _name_to_internal_id(user_name) ##from the function
 
         if internal_uid is None:
             logger.warning("User %S not registered. Skipping. ", user_name)
@@ -487,8 +491,8 @@ def register_user(name: str) -> tuple[int, bool] :
     #registry values are ints, so max works clearly
 
     existing_raw_ids = list(registry.values())
-    max_original_raw = max(u for u in _user2id.keys() if isinstance(u,int))
-    new_raw_id = max(existing_raw_ids, default=max_original_raw) + 1
+    max_original_raw = max(u for u in _user2id.keys() if isinstance(u,(int, np.integer)))
+    new_raw_id = max(existing_raw_ids, default=int(max_original_raw)) + 1
 
     #new user - assign next buffer slot
     new_internal_id = max(_user2id.values()) + 1 # _user2id is the dictionary from the pickle file contains
@@ -565,11 +569,11 @@ def _name_to_internal_id(name: str) -> int | None:
         return None
 
     with open(REGISTRY_PATH) as f:
-        registry = json.load(f)
+        registry = json.load(f) #json.load return "6041" (string)
     name_key = name.strip().lower()
     if name_key not in registry:
         return None
-    raw_id = registry[name_key] # int raw ID
+    raw_id = int(registry[name_key]) # int raw ID
     return _user2id.get(raw_id) # internal embedding index
 
 
