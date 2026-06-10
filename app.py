@@ -220,7 +220,7 @@ if st.button("Get Recommendations"):
 # Cold Start Recommendation - Uses genre to recommend top movies from that particular genre
 def cold_start_recommendations(genre_choice,top_n=10):
     #filter movies which are from the chosen genre
-    genre_movies = movies_with_ratings[movies_with_ratings["genres"].str.contains(genre_choice,na=False)]\
+    genre_movies = movies_with_ratings[movies_with_ratings["genres"].str.contains(genre_choice,na=False)]
     #sort by average rating
     genre_movies = genre_movies.sort_values("avg_rating",ascending=False)
 

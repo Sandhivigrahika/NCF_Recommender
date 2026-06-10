@@ -1,5 +1,7 @@
 #Environment Variables
+.env.local
 .env
+
 /.ipynb_checkpoints/
 /ml-1m/
 /model/test-tmdb_file.py
