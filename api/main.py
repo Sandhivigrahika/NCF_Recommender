@@ -195,6 +195,10 @@ def _run_retrain(db: Session, user_name: str):
 
     payload = [{"user_id": r.user_id, "movie_id": r.movie_id, "score": r.score} for r in new_ratings]
 
+    ''' payload = [{user_id: 1, "movie_id": 2, "score" : 4}, 
+        {user_id: 1, "movie_id": 2, "score" : 4},
+        {user_id: 1, "movie_id": 2, "score" : 4} ] '''
+
     history = None
 
     try:

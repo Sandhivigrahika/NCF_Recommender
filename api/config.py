@@ -9,21 +9,21 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 MODEL_DIR = BASE_DIR/"model"
 
 # Model + pickle paths
-MODEL_PATH      = BASE_DIR / "ncf_model.h5"
-USER2ID_PATH    = BASE_DIR / "user2id.pkl"
-ID2USER_PATH = BASE_DIR / "id2user.pkl"
-MOVIE2ID_PATH   = BASE_DIR / "movie2id.pkl"
-ID2MOVIE_PATH   = BASE_DIR / "id2movie.pkl"
-MOVIES_PKL_PATH = BASE_DIR / "movies_with_ratings.pkl"
+MODEL_PATH      = MODEL_DIR / "ncf_model.h5"
+USER2ID_PATH    = MODEL_DIR / "user2id.pkl"
+ID2USER_PATH = MODEL_DIR / "id2user.pkl"
+MOVIE2ID_PATH   = MODEL_DIR / "movie2id.pkl"
+ID2MOVIE_PATH   = MODEL_DIR / "id2movie.pkl"
+MOVIES_PKL_PATH = MODEL_DIR / "movies_with_ratings.pkl"
 
 #movies metadata
-MOVIES_DAT_PATH = BASE_DIR / "movies.dat"
-RATINGS_DAT_PATH  = BASE_DIR / "ratings.dat"
+MOVIES_DAT_PATH = MODEL_DIR / "movies.dat"
+RATINGS_DAT_PATH  = MODEL_DIR / "ratings.dat"
 
 #registry + live ratings
 REGISTRY_PATH = BASE_DIR/ "user_registry.json"
 RATINGS_UPDATED_PATH = BASE_DIR / "ratings_updated.csv"
-RATINGS_ORIGINAL_PATH = BASE_DIR / "ratings.dat"
+RATINGS_ORIGINAL_PATH = MODEL_DIR / "ratings.dat"
 
 #database
 DATABASE_URL = f"sqlite:///{BASE_DIR}/ratings.db"

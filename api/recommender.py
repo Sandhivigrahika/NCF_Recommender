@@ -497,6 +497,14 @@ def register_user(name: str) -> tuple[int, bool] :
     #new user - assign next buffer slot
     new_internal_id = max(_user2id.values()) + 1 # _user2id is the dictionary from the pickle file contains
 
+    EMBEDDING_TABLE_SIZE =  16040 #matched the retrained notebook
+
+    if new_internal_id >= EMBEDDING_TABLE_SIZE:
+        raise RuntimeError(
+            f"User Buffer exhausted (id {new_internal_id} >= {EMBEDDING_TABLE_SIZE} ). "
+            "Model needs to be rebuilt with a larger embedding table."
+        )
+
     #update registry - name ->raw integer ID
     registry[name_key] = int(new_raw_id)
     with open(REGISTRY_PATH, "w") as f:
