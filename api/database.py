@@ -15,6 +15,8 @@ class Rating(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(String, index=True)  # e.g. "new_user_abc123"
+    raw_id = Column(Integer, nullable=True)
+    internal_id = Column(Integer, nullable=True)
     movie_id = Column(Integer)  # MovieLens movieId
     score = Column(Float)  # 1.0 – 5.0
     created_at = Column(DateTime, default=datetime.utcnow)

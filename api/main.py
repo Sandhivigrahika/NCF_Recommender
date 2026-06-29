@@ -16,7 +16,7 @@ from api.models import (
     PopularRequest, PopularResponse,
     MetricsResponse,
     RetrainResponse, RetrainHistoryItem,
-    HealthResponse, RegisterResponse, RegisterRequest
+    HealthResponse, RegisterResponse, RegisterRequest, RecommendByNameRequest
 )
 
 logging.basicConfig(level=logging.INFO)
@@ -80,16 +80,31 @@ def recommend(req: RecommendRequest):
     Get top-N personalised recommendations for an existing user.
     Returns 404 if the user_id was not seen during training.
     """
-    movies = recommender.recommend_movies(req.user_id, req.top_n)
+    movies = recommender.recommend_movies(req.raw_id, req.top_n)
     if not movies:
         raise HTTPException(
             status_code=404,
-            detail=f"User {req.user_id} not found in training data. Use /popular for cold-start."
+            detail=f"User {req.raw_id} not found in training data. Use /popular for cold-start."
         )
     return RecommendResponse(
-        user_id=req.user_id,
+        raw_id=req.raw_id,
         movies=[MovieResult(**m) for m in movies],
     )
+
+@app.post("/recommend/by-name", response_model=RecommendResponse, tags=["Recommendations"])
+def recommend_by_name(req: RecommendByNameRequest): #name str
+    raw_id = recommender._name_to_raw_id(req.name)
+
+    if raw_id is None:
+        raise HTTPException(404, f" '{req.name}' is not registered. call /regiser first.")
+
+    movies = recommender.recommend_movies(raw_id, req.top_n)
+    if not movies:
+        raise HTTPException(404, f"raw_id {raw_id} not found in training data. Use /popular for cold-start.")
+
+    return RecommendResponse(raw_id=req.name, movies=[MovieResult(**m) for m in movies])
+
+
 
 
 @app.post("/popular", response_model=PopularResponse, tags=["Recommendations"])
@@ -152,31 +167,34 @@ def rate(req: RateRequest, db: Session = Depends(get_db)):
 
     RateRequest ->
     class RateRequest(BaseModel):
-    user_id:  str   = Field(..., examples=["new_user_abc123"])
+    user_id: str
+    raw_id: int = Field(..., examples=[6041])
     movie_id: int   = Field(..., examples=[1])
     score:    float = Field(..., ge=1.0, le=5.0, description="Rating between 1.0 and 5.0")
 
 
     """
 
-    user_id_normalised = req.user_id.strip().lower()
-    rating = Rating(user_id=user_id_normalised, movie_id=req.movie_id, score=req.score)
+    internal_id = recommender._user2id.get(req.raw_id)
+    if internal_id is None:
+        raise HTTPException(404, f"raw_id {req.raw_id} not registerd. Call  /register first.")
+
+
+
+    rating = Rating(user_id=str(req.raw_id),
+                    raw_id=req.raw_id,
+                    internal_id=internal_id,
+                    movie_id=req.movie_id,
+                    score=req.score)
     db.add(rating)
     db.commit()
+    count= db.query(Rating).filter(Rating.raw_id == req.raw_id).count()
+    return RateResponse(message="Rating Saved.", ratings_count=count, ready_for_rec=count>=MIN_NEW_RATINGS_TO_RETRAIN)
 
-    count = db.query(Rating).filter(Rating.user_id == req.user_id).count()
-
-    return RateResponse(
-        message="Rating saved.",
-        ratings_count=count,
-        ready_for_rec=count >= 20,
-    )
-
-
-@app.get("/ratings/{user_id}", tags=["Ratings"])
-def get_user_ratings(user_id: str, db: Session = Depends(get_db)):
+@app.get("/ratings/{raw_id}", tags=["Ratings"])
+def get_user_ratings(raw_id: int, db: Session = Depends(get_db)):
     """Fetch all ratings a specific user has submitted."""
-    ratings = db.query(Rating).filter(Rating.user_id == user_id).all()
+    ratings = db.query(Rating).filter(Rating.raw_id == raw_id).all()
     return [
         {"movie_id": r.movie_id, "score": r.score, "created_at": r.created_at}
         for r in ratings
@@ -185,74 +203,87 @@ def get_user_ratings(user_id: str, db: Session = Depends(get_db)):
 
 # ── Retraining ────────────────────────────────────────────────────
 
-def _run_retrain(db: Session, user_name: str):
-    """Background task: fine-tune the model on all new ratings."""
-    new_ratings = db.query(Rating).filter(Rating.user_id == user_name.strip().lower()).all() #this returns a list of Rating objects
+def _run_retrain(raw_id: int):
+    """Background task: fine-tune the model on all new ratings.
+    Starting a new db connection within the background task:
+    fast api runs db.close() as soon as the endpoint function returns, because that's when the dependency generator gets closed out,
+    it doesn't wait for the background tasks. Beause of this a query or commit inside a background could raise Session is closed error.
+    The fix-
+    open a fresh connection inside the task itself, scoped to that task's own lifetime and close it within the task itself.
+    """
 
-    if len(new_ratings) < MIN_NEW_RATINGS_TO_RETRAIN:
-        logger.info("Not enough new ratings to retrain (%d < %d).", len(new_ratings), MIN_NEW_RATINGS_TO_RETRAIN)
-        return
-
-    payload = [{"user_id": r.user_id, "movie_id": r.movie_id, "score": r.score} for r in new_ratings]
-
-    ''' payload = [{user_id: 1, "movie_id": 2, "score" : 4}, 
-        {user_id: 1, "movie_id": 2, "score" : 4},
-        {user_id: 1, "movie_id": 2, "score" : 4} ] '''
-
+    from api.database import SessionLocal
+    db = SessionLocal()
+    new_ratings = []
     history = None
 
     try:
-        #persist to CSV before retraining
-        internal_id = recommender._user2id.get(user_name.strip().lower())
-        if internal_id is None:
-            logger.error("User %s not found in registry. Aborting retrain.",user_name)
+        new_ratings=db.query(Rating).filter(Rating.raw_id == raw_id).all()
+
+        if len(new_ratings) < MIN_NEW_RATINGS_TO_RETRAIN:
+            logger.info("Not enough new ratings to retrain (%d < %d).", len(new_ratings), MIN_NEW_RATINGS_TO_RETRAIN)
             return
 
-        recommender.append_to_ratings(internal_id,
-                                      [{"item_id": r.movie_id, "score": r.score} for r in new_ratings])
+        internal_id = new_ratings[0].internal_id #already resolved at /rate tim
 
-        #step 2 - retrain  model
+        if internal_id is None:
+            logger.error("Ratings for raw_id %s have no internal_id. Aborting retrain")
+            return
+
+        recommender.append_to_ratings(
+            raw_id,
+            [{"item_id": r.movie_id,
+              "score":r.score}
+             for r in new_ratings]
+        )
+
+        payload = [ {"internal_id": internal_id, "movie_id": r.movie_id, "score": r.score} for r in new_ratings]
+
         result = recommender.retrain_model(payload)
+
         history = RetrainHistory(
-            triggered_at=datetime.utcnow(),
-            new_ratings=len(payload),
+            triggered_at = datetime.utcnow(),
+            new_ratings = len(payload),
             epochs=result["epochs"],
             loss_before=result["loss_before"],
             loss_after=result["loss_after"],
-            status="success",
+            status="Success",
         )
+
     except Exception as exc:
-        logger.error("Retraining failed: %s", exc)
-        history = RetrainHistory(
-            triggered_at=datetime.utcnow(),
-            new_ratings=len(payload),
-            epochs=0,
-            status="failed",
-            notes=str(exc),
+        logger.error("Retraining Failed: %s", exc)
+        history= RetrainHistory(
+        triggered_at=datetime.utcnow(),
+        new_ratings=len(new_ratings),
+        epochs=0,
+        status="failed",
+        notes=str(exc),
         )
     finally:
         if history:
             db.add(history)
             db.commit()
+        db.close()
+
 
 
 @app.post("/retrain", response_model=RetrainResponse, tags=["MLOps"])
 def trigger_retrain(background_tasks: BackgroundTasks,
-                    user_name: str,
+                    raw_id: int,
                     db: Session = Depends(get_db)):
     """
     Manually trigger a retraining run.
     The fine-tuning runs in the background — the response returns immediately.
     Requires at least MIN_NEW_RATINGS_TO_RETRAIN ratings in the DB.
     """
-    count = db.query(Rating).filter(Rating.user_id == user_name.strip().lower()).count()
+    count = db.query(Rating).filter(Rating.raw_id == raw_id).count()
     if count < MIN_NEW_RATINGS_TO_RETRAIN:
         raise HTTPException(
             status_code=400,
             detail=f"Need at least {MIN_NEW_RATINGS_TO_RETRAIN} ratings to retrain. Currently have {count}."
         )
 
-    background_tasks.add_task(_run_retrain, db, user_name)
+    background_tasks.add_task(_run_retrain, raw_id)
 
     return RetrainResponse(
         message="Retraining started in background.",
@@ -287,10 +318,11 @@ def register(req: RegisterRequest):
         Call this when a user lands on the frontend before showing them movies to rate.
         """
 
-    internal_id, is_new = recommender.register_user(req.name)
+    raw_id, internal_id, is_new = recommender.register_user(req.name) #internal_id  = 6043
 
     return RegisterResponse(
         internal_id=internal_id,
+        raw_id=raw_id,
         is_new=is_new,
         message="Welcome!" if is_new else "Welcome back!"
     )

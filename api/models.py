@@ -6,12 +6,19 @@ from datetime import datetime
 # ── Request schemas ──────────────────────────────────────────────
 
 class RecommendRequest(BaseModel):
-    user_id: int = Field(..., examples=[1], description="Existing MovieLens user ID")
+    raw_id: int = Field(..., examples=[1], description="Existing MovieLens user ID")
     top_n:   int = Field(10, ge=1, le=50, description="Number of recommendations (1–50)")
 
 
+class RecommendByNameRequest(BaseModel):
+    name: str
+    top_n: int = Field(10, ge=1, le=50, description="Number of recommendations (1-50)")
+
+
+
 class RateRequest(BaseModel):
-    user_id:  str   = Field(..., examples=["new_user_abc123"])
+    user_id: str
+    raw_id: int = Field(..., examples=[6041])
     movie_id: int   = Field(..., examples=[1])
     score:    float = Field(..., ge=1.0, le=5.0, description="Rating between 1.0 and 5.0")
 
@@ -37,7 +44,7 @@ class MovieDetails(BaseModel):
     tmdb_id: Optional[int] = None
 
 class RecommendResponse(BaseModel):
-    user_id: int
+    raw_id: int
     movies:  list[MovieResult]
 
 
@@ -89,5 +96,6 @@ class RegisterRequest(BaseModel):
 
 class RegisterResponse(BaseModel):
     internal_id: int
+    raw_id: int
     is_new: bool
     message: str

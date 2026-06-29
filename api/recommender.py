@@ -324,8 +324,7 @@ The model architecture never changes. The vast majority of weights (all the othe
 def retrain_model(new_ratings: list[dict]) -> dict:
     """
         Retrain the model on binary ratings from a single registered user session.
-        new_ratings: list of {"user_id": str, "movie_id": int, "score": int}
-                            {"user_id": "2", "movie_id": 345, "score": 0/1}
+        new_ratings: list of {"internal_id": int, "movie_id": int, "score": float}
         score is 0 or 1 — no normalisation needed.
         """
     global _model
@@ -334,7 +333,7 @@ def retrain_model(new_ratings: list[dict]) -> dict:
 
     for r in new_ratings:
         raw_movie_id = r["movie_id"]
-        user_name = r["user_id"]
+        internal_uid = r["internal_id"]
 
         if raw_movie_id not in _movie2id:
             continue
@@ -343,11 +342,11 @@ def retrain_model(new_ratings: list[dict]) -> dict:
         #lookup the internal id assigned during registration
         # don't create a new one here = register_user already did that
 
-        internal_uid = _name_to_internal_id(user_name) ##from the function
+        '''internal_uid = _name_to_internal_id(user_name) ##from the function
 
         if internal_uid is None:
             logger.warning("User %S not registered. Skipping. ", user_name)
-            continue
+            continue'''
 
         user_indices.append(internal_uid)
         movie_indices.append(_movie2id[raw_movie_id])
@@ -464,7 +463,7 @@ def get_title_for_movie_id(raw_movie_id: int) -> str | None:
     """Look up a movie title from it's raw MovieLens ID. Instant, no network call"""
     return _movie_dict.get(raw_movie_id)
 
-def register_user(name: str) -> tuple[int, bool] :
+def register_user(name: str) -> tuple[int , int, bool] :
     """
     Register a user by name. Returns (internal_user_id, is_new_user).
     Same name always gets the same internal ID.
@@ -485,7 +484,7 @@ def register_user(name: str) -> tuple[int, bool] :
     if name_key in registry:
         raw_id = int(registry[name_key]) #integer raw ID from registry
         internal_id = _user2id[raw_id] # internal embedding index
-        return internal_id , False
+        return raw_id, internal_id , False
 
     #assing a new integer raw ID beyond the original range
     #registry values are ints, so max works clearly
@@ -526,7 +525,7 @@ def register_user(name: str) -> tuple[int, bool] :
         pickle.dump(_id2user, f)
 
     logger.info("New user registered: %s → internal_id %d", name_key, new_internal_id)
-    return new_internal_id, True
+    return new_raw_id, new_internal_id, True
 
 
 
@@ -571,7 +570,7 @@ def append_to_ratings(internal_user_id: int, session_ratings: list[dict]) -> Non
 
 
 def _name_to_internal_id(name: str) -> int | None:
-    """Convert a registered name to its internal embedding index"""
+    """Convert a registered name to its internal embedding index as present in user2id.pkl"""
 
     if not path(REGISTRY_PATH).exists():
         return None
@@ -584,6 +583,17 @@ def _name_to_internal_id(name: str) -> int | None:
     raw_id = int(registry[name_key]) # int raw ID
     return _user2id.get(raw_id) # internal embedding index
 
+
+def _name_to_raw_id(name: str) -> int | None:
+    if not path(REGISTRY_PATH).exists():
+        return None
+
+    with open(REGISTRY_PATH) as f:
+        registry = json.load(f)
+    name_key = name.strip().lower()
+    raw_id = registry.get(name_key)
+
+    return int(raw_id) if raw_id is not None else None
 
 
 
