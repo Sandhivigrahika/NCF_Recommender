@@ -39,7 +39,7 @@ export interface MovieDetails {
 
 
 export interface RecommendResponse {
-    user_id: number;
+    raw_id: number;
     movies: MovieResult[];
 
 }
@@ -50,7 +50,7 @@ export interface PopularResponse {
 }
 
 export interface MetricsResponse {
-    hit_at_k: number;
+  hit_at_k: number;
   ndcg_at_k: number;
   k: number;
   test_users: number;
@@ -65,8 +65,14 @@ export interface RateResponse {
 
 export interface RegisterResponse {
   internal_id:number;
+  raw_id: number;
   is_new: boolean;
   message: string;
+}
+
+export interface RetrainResponse {
+  message: string;
+  status: string;
 }
 
 
@@ -83,23 +89,43 @@ export async function registerUser(name: string): Promise<RegisterResponse> {
     body: JSON.stringify({ name }),
   });
   if (!res.ok) throw new Error(await res.text());
-  return res.json();
+  const data = await res.json();
+
+  console.log("CHECKPOINT 1 (api.ts):", data, "raw_id type:", typeof data.raw_id);
+  
+  return data;
 }
 
 /** Get personalised recommendations for an existing user */
 export async function getRecommendations(
-    userId: number,
+    rawId: number,
     topN: number = 10
 
 ): Promise<RecommendResponse> {
     const res = await fetch(`${BASE_URL}/recommend`, {
         method: "POST", //used post instead of GET because /recommend payloads can grow
         headers: {"Content-Type": "application/json"},
-        body: JSON.stringify({user_id: userId, top_n: topN}),
+        body: JSON.stringify({user_id: rawId, top_n: topN}),
     });
 
     if (!res.ok) throw new Error(await res.text());
     return res.json();
+}
+
+
+/**Get personalised recommendations for an exisitng user, by name (convenience entry point). */
+export async function getRecommendationsByName(
+  name: string,
+  topN: number = 10
+): Promise<RecommendResponse> {
+  const res = await fetch(`${BASE_URL}/recommend/by-name`, {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({name, top_n: topN}),
+  });
+
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
 }
 
 /** Get popular movies — cold start for new users */
@@ -128,17 +154,25 @@ export async function getMovieDetails(movieId: number): Promise<MovieDetails> {
 
 /** Submit a rating from a new user */
 export async function submitRating(
-  userId: string,
+  rawId: number,
   movieId: number,
-  score: number
+  score: number,
+  userName: string = "" //optional display name; backend stores in but doesn't use it for lookups
 ): Promise<RateResponse> {
+
+  console.log("DEBUG rawId:", rawId, typeof rawId)
+
   const res = await fetch(`${BASE_URL}/rate`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ user_id: userId, movie_id: movieId, score }),
+    body: JSON.stringify({raw_id: rawId, movie_id: movieId, score,userName}),
   });
   if (!res.ok) throw new Error(await res.text());
-  return res.json();
+  const data = await res.json()
+
+  console.log("DEBUG: Submit rating raw response ", data)
+  
+  return data
 }
 
 
@@ -152,7 +186,7 @@ export async function getMetrics(k: number = 10): Promise<MetricsResponse> {
 
  
 /** Trigger a manual retrain */
-export async function triggerRetrain(userName?: string): Promise<{ message: string; status: string }> {
+export async function triggerRetrain(rawId?: number): Promise<{ message: string; status: string }> {
   const res = await fetch(`${BASE_URL}/retrain`, { method: "POST" });
   if (!res.ok) throw new Error(await res.text());
   return res.json();

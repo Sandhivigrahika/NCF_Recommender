@@ -173,6 +173,7 @@ def rate(req: RateRequest, db: Session = Depends(get_db)):
     score:    float = Field(..., ge=1.0, le=5.0, description="Rating between 1.0 and 5.0")
 
 
+
     """
 
     internal_id = recommender._user2id.get(req.raw_id)

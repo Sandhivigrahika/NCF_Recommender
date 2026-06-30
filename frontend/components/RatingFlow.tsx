@@ -14,7 +14,7 @@ const BUFFER_SIZE = 50;
 
 interface Props {
   userName:   string;
-  internalId: number;
+  rawId: number;
   onComplete: (movies: MovieResult[]) => void;
 }
 
@@ -26,7 +26,7 @@ interface RatingCard {
   submitted: boolean;
 }
 
-export default function RatingFlow({ userName, internalId, onComplete }: Props) {
+export default function RatingFlow({ userName, rawId, onComplete }: Props) {
   const [step, setStep]               = useState<"genre" | "rate" | "retrain">("genre");
   const [selectedGenre, setGenre]     = useState<string | null>(null);
   const [buffer, setBuffer]           = useState<MovieResult[]>([]);     // all loaded, unrated
@@ -78,6 +78,7 @@ export default function RatingFlow({ userName, internalId, onComplete }: Props) 
     }
   };
 
+
   // ── Shuffle — pick 10 new unrated from buffer ────────────────
   const handleShuffle = async () => {
     await loadVisible(buffer, ratedIds);
@@ -85,6 +86,7 @@ export default function RatingFlow({ userName, internalId, onComplete }: Props) 
 
   // ── Rate a movie ─────────────────────────────────────────────
   const handleRate = async (idx: number, score: number) => {
+    console.log("CHECKPOINT 4 (handleRate entry, closure value):", rawId, typeof rawId);
     const card = visible[idx];
     if (!card.movie.movie_id || card.submitted) return;
 
@@ -92,7 +94,7 @@ export default function RatingFlow({ userName, internalId, onComplete }: Props) 
     setVisible(prev => prev.map((c, i) => i === idx ? { ...c, rating: score } : c));
 
     try {
-      const res = await submitRating(userName, card.movie.movie_id, score);
+      const res = await submitRating(rawId, card.movie.movie_id, score);
 
       // Mark submitted in visible
       setVisible(prev => prev.map((c, i) => i === idx ? { ...c, submitted: true } : c));
@@ -118,10 +120,10 @@ export default function RatingFlow({ userName, internalId, onComplete }: Props) 
     setRetraining(true);
     setMessage("Retraining model on your ratings...");
     try {
-      await triggerRetrain(userName);
+      await triggerRetrain(rawId);
       setMessage("Retrain complete! Fetching your personalised picks...");
       await new Promise(r => setTimeout(r, 3000));
-      const res = await getRecommendations(internalId, 10);
+      const res = await getRecommendations(rawId, 10);
       onComplete(res.movies);
     } catch (e: any) {
       setMessage(e.message?.includes("ratings")

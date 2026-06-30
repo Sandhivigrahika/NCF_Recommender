@@ -5,7 +5,7 @@ import "./globals.css";
 const inter = Inter({ subsets: ["latin"] });
 
 export const metadata: Metadata = {
-  title: "NCF Movie Recommender",
+  title: "NCF Movie.... Recommender",
   description: "Neural Collaborative Filtering recommender — built with FastAPI, React, and MovieLens 1M",
 };
 

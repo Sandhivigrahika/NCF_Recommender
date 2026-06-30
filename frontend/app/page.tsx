@@ -19,7 +19,7 @@ type Tab = "discover" | "newuser";
 // ── New user state ────────────────────────────────────────────────
 interface UserSession {
   name: string;
-  internal_id: number;
+  raw_id: number;
   is_new: boolean;
 }
 
@@ -75,7 +75,8 @@ export default function Home() {
 
   // ── New user handlers ────────────────────────────────────────
   const handleRegistered = (user: RegisterResponse & { name: string }) => {
-    setSession({ name: user.name, internal_id: user.internal_id, is_new: user.is_new });
+    console.log("CHECKPOINT 2 (page.tsx received):", user, "raw_id type:", typeof user.raw_id);
+    setSession({ name: user.name, raw_id: user.raw_id, is_new: user.is_new });
     setShowRegister(false);
   };
 
@@ -129,7 +130,7 @@ export default function Home() {
                   {session.name}
                 </p>
                 <p style={{ color: "#52525b", fontSize: "0.7rem", margin: 0 }}>
-                  ID #{session.internal_id} · {session.is_new ? "new user" : "returning"}
+                  ID #{session.raw_id} · {session.is_new ? "new user" : "returning"}
                 </p>
               </div>
               <button
@@ -264,10 +265,12 @@ export default function Home() {
                 </div>
                 </div>
 
+                {console.log("CHECKPOINT 3 (session at render):", session, "raw_id type:", typeof session.raw_id)}
+
                 {/* Rating flow */}
                 <RatingFlow
                   userName={session.name}
-                  internalId={session.internal_id}
+                  rawId={session.raw_id}
                   onComplete={handleRatingComplete}
                 />
               </>

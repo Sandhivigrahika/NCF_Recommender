@@ -17,7 +17,6 @@ class RecommendByNameRequest(BaseModel):
 
 
 class RateRequest(BaseModel):
-    user_id: str
     raw_id: int = Field(..., examples=[6041])
     movie_id: int   = Field(..., examples=[1])
     score:    float = Field(..., ge=1.0, le=5.0, description="Rating between 1.0 and 5.0")
