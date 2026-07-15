@@ -1,0 +1,14 @@
+.idea/
+.vscode/
+__pycache__/
+*.pyc
+*.ipynb
+.git/
+.gitignore
+venv/
+.venv/
+*.db
+ratings_updated.csv
+user_registry.json
+.env
+.DS_Store

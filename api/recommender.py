@@ -15,7 +15,8 @@ from api.config import (
  MODEL_PATH, USER2ID_PATH, MOVIE2ID_PATH,
     ID2MOVIE_PATH, MOVIES_PKL_PATH, MOVIES_DAT_PATH,
     RETRAIN_EPOCHS, RETRAIN_LEARNING_RATE,
-    REGISTRY_PATH, ID2USER_PATH, RATINGS_UPDATED_PATH, RATINGS_DAT_PATH
+    REGISTRY_PATH, ID2USER_PATH, RATINGS_UPDATED_PATH, RATINGS_DAT_PATH, MODEL_SAVE_PATH, USER2ID_SAVE_PATH,
+ID2USER_SAVE_PATH
 )
 
 
@@ -43,16 +44,20 @@ def load_artifacts():
 
     global _model, _user2id, _movie2id, _id2movie, _movies_with_ratings, _movie_dict, _id2user, _user_last_movie, _ratings_df
 
+    model_src = MODEL_SAVE_PATH if MODEL_SAVE_PATH.exists()  else MODEL_PATH
+    user2id_src = USER2ID_SAVE_PATH if USER2ID_SAVE_PATH.exists() else USER2ID_PATH
+    id2user_src = ID2USER_SAVE_PATH if ID2USER_SAVE_PATH.exists() else ID2USER_PATH
 
 
-    logger.info("Loading model from %%s", MODEL_PATH)
-    _model = tf.keras.models.load_model(str(MODEL_PATH), compile=False)
+    logger.info("Loading model from %%s", model_src)
+    _model = tf.keras.models.load_model(str(model_src), compile=False)
 
-    with open(USER2ID_PATH, "rb") as f: _user2id = pickle.load(f) #from raw user ids to compact ids
+    with open(user2id_src, "rb") as f: _user2id = pickle.load(f) #from raw user ids to compact ids
+    with open(id2user_src, "rb") as f: _id2user = pickle.load(f)
     with open(MOVIE2ID_PATH, "rb") as f: _movie2id = pickle.load(f) #from raw movies ids to compact ids
     with open(ID2MOVIE_PATH, "rb") as f: _id2movie = pickle.load(f) #from compact ids to movie, in order to find the movies back
     with open(MOVIES_PKL_PATH, "rb") as f: _movies_with_ratings = pickle.load(f) #movies and their reatings
-    with open(ID2USER_PATH, "rb") as f: _id2user = pickle.load(f)
+
 
     _ratings_df = pd.read_csv(
         str(RATINGS_DAT_PATH), sep="::", engine="python",
@@ -112,7 +117,7 @@ Returns [] if user_id not in training data.
      raise RuntimeError("Model not loaded.")
 
  preds = _model.predict([user_array, movie_array], verbose=0).flatten()
- print(preds)
+
 
  top_indices = preds.argsort()[-top_n:][::-1]
 
@@ -375,7 +380,7 @@ def retrain_model(new_ratings: list[dict]) -> dict:
     loss_after = float(_model.evaluate([X_user, X_movie],Y, verbose=0))
 
 
-    _model.save(str(MODEL_PATH))
+    _model.save(str(MODEL_SAVE_PATH))
     logger.info("Model Retrained. Loss %5.4f -> %.4f", loss_before, loss_after)
 
     return {
@@ -513,7 +518,7 @@ def register_user(name: str) -> tuple[int , int, bool] :
     _user2id[new_raw_id] = new_internal_id
     _id2user[new_internal_id] = new_raw_id
 
-    with open(USER2ID_PATH, "wb") as f:
+    with open(USER2ID_SAVE_PATH, "wb") as f:
         pickle.dump(_user2id, f)
 
     '''This is fine for now but it's a race condition waiting to happen — if two users register simultaneously, 
@@ -521,7 +526,7 @@ def register_user(name: str) -> tuple[int , int, bool] :
     For a portfolio project it's acceptable. 
     Just be aware of it if an interviewer asks.'''
 
-    with open(ID2USER_PATH, "wb") as f:
+    with open(ID2USER_SAVE_PATH, "wb") as f:
         pickle.dump(_id2user, f)
 
     logger.info("New user registered: %s → internal_id %d", name_key, new_internal_id)
