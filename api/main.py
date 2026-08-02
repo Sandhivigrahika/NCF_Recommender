@@ -203,7 +203,7 @@ def get_user_ratings(raw_id: int, db: Session = Depends(get_db)):
 
 
 # ── Retraining ────────────────────────────────────────────────────
-
+'''
 def _run_retrain(raw_id: int):
     """Background task: fine-tune the model on all new ratings.
     Starting a new db connection within the background task:
@@ -266,39 +266,20 @@ def _run_retrain(raw_id: int):
             db.commit()
         db.close()
 
-
+'''
 
 @app.post("/retrain", response_model=RetrainResponse, tags=["MLOps"])
 def trigger_retrain(background_tasks: BackgroundTasks,
                     raw_id: int,
                     db: Session = Depends(get_db)):
-    """
-    Manually trigger a retraining run.
-    The fine-tuning runs in the background — the response returns immediately.
-    Requires at least MIN_NEW_RATINGS_TO_RETRAIN ratings in the DB.
-    """
-    count = db.query(Rating).filter(Rating.raw_id == raw_id).count()
-    if count < MIN_NEW_RATINGS_TO_RETRAIN:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Need at least {MIN_NEW_RATINGS_TO_RETRAIN} ratings to retrain. Currently have {count}."
-        )
 
-    background_tasks.add_task(_run_retrain, raw_id)
-
-    return RetrainResponse(
-        message="Retraining started in background.",
-        triggered_at=datetime.utcnow(),
-        new_ratings=count,
-        status="started",
-    )
+    raise HTTPException(status_code=501, detail="Retraining is an offline scheduled job.")
 
 
 @app.get("/retrain/history", response_model=list[RetrainHistoryItem], tags=["MLOps"])
 def retrain_history(db: Session = Depends(get_db)):
     """Returns the full log of retraining events — shown in the frontend activity feed."""
     return db.query(RetrainHistory).order_by(RetrainHistory.triggered_at.desc()).all()
-
 
 # ── Metrics ───────────────────────────────────────────────────────
 

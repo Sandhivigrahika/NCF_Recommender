@@ -1,9 +1,9 @@
 import pickle
 import numpy as np
 import pandas as pd
-import tensorflow as tf
+#import tensorflow as tf
 from pathlib import Path as path
-
+import api.ncf_numpy as ncf_numpy
 
 import json
 import time
@@ -16,7 +16,7 @@ from api.config import (
     ID2MOVIE_PATH, MOVIES_PKL_PATH, MOVIES_DAT_PATH,
     RETRAIN_EPOCHS, RETRAIN_LEARNING_RATE,
     REGISTRY_PATH, ID2USER_PATH, RATINGS_UPDATED_PATH, RATINGS_DAT_PATH, MODEL_SAVE_PATH, USER2ID_SAVE_PATH,
-ID2USER_SAVE_PATH
+ID2USER_SAVE_PATH, WEIGHTS_DIR
 )
 
 
@@ -25,7 +25,7 @@ logger = logging.getLogger(__name__)
 #Singleton state
 # loaded once on startup, reused across all requests
 
-_model:  tf.keras.Model | None = None
+#_model:  tf.keras.Model | None = None
 _user2id: dict = {}
 _id2user: dict = {}
 _movie2id: dict = {}
@@ -42,7 +42,7 @@ def load_artifacts():
     """ Load model + all pickle files into module-level singletons"""
 
 
-    global _model, _user2id, _movie2id, _id2movie, _movies_with_ratings, _movie_dict, _id2user, _user_last_movie, _ratings_df
+    global _user2id, _movie2id, _id2movie, _movies_with_ratings, _movie_dict, _id2user, _user_last_movie, _ratings_df
 
     model_src = MODEL_SAVE_PATH if MODEL_SAVE_PATH.exists()  else MODEL_PATH
     user2id_src = USER2ID_SAVE_PATH if USER2ID_SAVE_PATH.exists() else USER2ID_PATH
@@ -50,8 +50,8 @@ def load_artifacts():
 
 
     logger.info("Loading model from %%s", model_src)
-    _model = tf.keras.models.load_model(str(model_src), compile=False)
-
+    #_model = tf.keras.models.load_model(str(model_src), compile=False)
+    ncf_numpy.load_weights(WEIGHTS_DIR) #loading the weights from api/weights for the numpy forward pass
     with open(user2id_src, "rb") as f: _user2id = pickle.load(f) #from raw user ids to compact ids
     with open(id2user_src, "rb") as f: _id2user = pickle.load(f)
     with open(MOVIE2ID_PATH, "rb") as f: _movie2id = pickle.load(f) #from raw movies ids to compact ids
@@ -90,7 +90,7 @@ def load_artifacts():
 
 
 def is_model_loaded() -> bool:
-    return _model is not None
+    return ncf_numpy.is_loaded()
 
 
 
@@ -113,10 +113,12 @@ Returns [] if user_id not in training data.
  user_array = np.full(len(all_movie_ids), uid)
  movie_array = np.array(all_movie_ids)
 
- if _model is None:
+
+ if not ncf_numpy.is_loaded():
      raise RuntimeError("Model not loaded.")
 
- preds = _model.predict([user_array, movie_array], verbose=0).flatten()
+ #preds = _model.predict([user_array, movie_array], verbose=0).flatten()
+ preds = ncf_numpy.score(user_array, movie_array)
 
 
  top_indices = preds.argsort()[-top_n:][::-1]
@@ -226,9 +228,7 @@ def compute_metrics(k: int = 10, sample_users: int = 200) -> dict:
         user_array = np.full(len(cand_compact), uid)
         movie_array = np.array(cand_compact)
 
-        predictions = _model.predict(
-            [user_array, movie_array], verbose=0
-        ).flatten()
+        predictions = ncf_numpy.score(user_array, movie_array)
 
         ''' _model.predict() will return a 2D array 
         [[0.3 ],
@@ -326,68 +326,6 @@ Saves the updated weights back to disk
 The model architecture never changes. The vast majority of weights (all the other users' embeddings, the dense layers) barely move because the learning rate is tiny.
 '''
 
-def retrain_model(new_ratings: list[dict]) -> dict:
-    """
-        Retrain the model on binary ratings from a single registered user session.
-        new_ratings: list of {"internal_id": int, "movie_id": int, "score": float}
-        score is 0 or 1 — no normalisation needed.
-        """
-    global _model
-
-    user_indices, movie_indices, scores = [],[],[]
-
-    for r in new_ratings:
-        raw_movie_id = r["movie_id"]
-        internal_uid = r["internal_id"]
-
-        if raw_movie_id not in _movie2id:
-            continue
-
-
-        #lookup the internal id assigned during registration
-        # don't create a new one here = register_user already did that
-
-        '''internal_uid = _name_to_internal_id(user_name) ##from the function
-
-        if internal_uid is None:
-            logger.warning("User %S not registered. Skipping. ", user_name)
-            continue'''
-
-        user_indices.append(internal_uid)
-        movie_indices.append(_movie2id[raw_movie_id])
-        scores.append(float(r["score"]))
-
-    if not user_indices:
-        logger.warning("No valid ratings to retrain on.")
-        return {"loss_before": None, "loss_after": None, "epochs": 0 }
-
-
-    X_user = np.array(user_indices)
-    X_movie = np.array(movie_indices)
-
-    Y = np.array(scores, dtype=np.float32)
-
-    if _model is None:
-        raise RuntimeError("Model not loaded.")
-
-    _model.compile(
-        optimizer=tf.keras.optimizers.Adam(learning_rate=RETRAIN_LEARNING_RATE),
-        loss="binary_crossentropy" #correct loss for 0/1 labels
-    )
-
-    loss_before= float(_model.evaluate([X_user, X_movie], Y, verbose=0))
-    _model.fit([X_user, X_movie], Y, epochs=RETRAIN_EPOCHS, batch_size=32, verbose=0)
-    loss_after = float(_model.evaluate([X_user, X_movie],Y, verbose=0))
-
-
-    _model.save(str(MODEL_SAVE_PATH))
-    logger.info("Model Retrained. Loss %5.4f -> %.4f", loss_before, loss_after)
-
-    return {
-        "loss_before": round(loss_before, 6),
-        "loss_after": round(loss_after, 6),
-        "epochs": RETRAIN_EPOCHS,
-    }
 
 
 '''The one big issue with retraining something worth looking out for 

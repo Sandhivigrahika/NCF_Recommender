@@ -1,17 +1,30 @@
-#Environment Variables
-.env.local
+# Environment
 .env
+.env.local
 
+# Python
+__pycache__/
+*.pyc
+
+# Notebooks
 /.ipynb_checkpoints/
+
+# Datasets (large / raw)
 /ml-1m/
+/ml-1m.zip
+/ml-1m-Copy1.zip
+/data/
+
+# Runtime-generated (writable state, not source)
+ratings.db
+/api/ratings_updated.csv
+/api/user_registry.json
+
+# Junk inside model/
 /model/test-tmdb_file.py
 /model/error log
 /model/users.dat
-/data/
-/ml-1m.zip
-/ml-1m-Copy1.zip
-/model/ratings.dat
+
+# Docs scratch
 /README
 /Readme.txt
-/model/
-/model/

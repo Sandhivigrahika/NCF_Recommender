@@ -19,6 +19,7 @@ MOVIE2ID_PATH   = MODEL_DIR / "movie2id.pkl"
 ID2MOVIE_PATH   = MODEL_DIR / "id2movie.pkl"
 MOVIES_PKL_PATH = MODEL_DIR / "movies_with_ratings.pkl"
 RATINGS_ORIGINAL_PATH = MODEL_DIR / "ratings.dat"
+WEIGHTS_DIR = BASE_DIR/"api"/"weights"
 
 #movies metadata
 MOVIES_DAT_PATH = MODEL_DIR / "movies.dat"
