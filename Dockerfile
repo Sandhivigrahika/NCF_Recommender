@@ -1,7 +1,7 @@
 FROM python:3.10-slim
 
 ENV PYTHONUNBUFFERED=1 \
-    DATA_DIR =/data
+    DATA_DIR=/data
 
 
 RUN useradd -m -u 1000 user \
