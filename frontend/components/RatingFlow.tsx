@@ -231,7 +231,7 @@ export default function RatingFlow({ userName, rawId, onComplete }: Props) {
       )}
 
       {/* Movie cards grid */}
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(160px, 1fr))", gap: "1rem" }}>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: "1rem" }}>
         {visible.map((card, idx) => (
           <div
             key={card.movie.movie_id ?? idx}
@@ -335,23 +335,29 @@ export default function RatingFlow({ userName, rawId, onComplete }: Props) {
       </div>
 
       {/* Retrain button */}
-      {step === "retrain" && (
-        <button
-          onClick={handleRetrain}
-          disabled={retraining}
-          style={{
-            width: "100%", padding: "1rem",
-            backgroundColor: retraining ? "#3f3f46" : "#059669",
-            color: retraining ? "#71717a" : "white",
-            border: "none", borderRadius: "10px",
-            fontSize: "0.875rem", fontWeight: 600,
-            cursor: retraining ? "not-allowed" : "pointer",
-          }}
-        >
-          {retraining
-            ? "⚙️ Retraining model on your ratings..."
-            : `⚡ Train model on my ${ratingCount} ratings → Get personalised recommendations`}
-        </button>
+            {step === "retrain" && (
+        <div style={{
+          backgroundColor: "rgba(16,185,129,0.08)",
+          border: "1px solid rgba(16,185,129,0.25)",
+          borderRadius: "10px",
+          padding: "1.25rem",
+          display: "flex",
+          flexDirection: "column",
+          gap: "0.75rem",
+        }}>
+          <p style={{ color: "#34d399", fontWeight: 600, fontSize: "0.95rem", margin: 0 }}>
+            ✓ {ratingCount} ratings saved for {userName}
+          </p>
+          <p style={{ color: "#a1a1aa", fontSize: "0.78rem", lineHeight: 1.6, margin: 0 }}>
+            In this deployment, model retraining runs as a scheduled <strong style={{ color: "#d4d4d8" }}>offline batch job</strong> rather
+            than on demand. The serving model is framework-free (NumPy) so it fits free-tier
+            hosting — so your ratings are collected here, and fine-tuning happens separately with
+            updated weights redeployed. A production build would trigger this automatically.
+          </p>
+          <p style={{ color: "#52525b", fontSize: "0.72rem", margin: 0 }}>
+            Meanwhile, explore personalised picks for existing users (ID 1–6040) on the Discover tab.
+          </p>
+        </div>
       )}
     </div>
   );

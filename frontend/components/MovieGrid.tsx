@@ -18,7 +18,7 @@ export default function MovieGrid({ movies, title }: Props) {
       </h2>
       <div style={{
         display: "grid",
-        gridTemplateColumns: "repeat(auto-fill, minmax(160px, 1fr))",
+        gridTemplateColumns: "repeat(5, 1fr)",
         gap: "1rem",
       }}>
         {movies.map((movie, i) => (
