@@ -151,6 +151,7 @@ async def get_movie_details(movie_title: str) -> dict:
                     tmdb_id = movie.get("id")
                     tmdb_overview = movie.get("overview", "")
                     poster = movie.get("poster_path")
+                    tmdb_rating = movie.get("vote_average")   # ← add this, 0–10 float
 
                     if poster:
                         poster_url = f"https://image.tmdb.org/t/p/w500{poster}" #build the poster url
@@ -175,7 +176,8 @@ async def get_movie_details(movie_title: str) -> dict:
         "title": movie_title,
         "poster_url": poster_url,
         "summary": summary,
-        "tmdb_id" : tmdb_id
+        "tmdb_id" : tmdb_id,
+        "rating": tmdb_rating
     }
 
 

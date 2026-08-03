@@ -26,6 +26,7 @@ export interface MovieResult {
     title: string;
     score: number | null;
     movie_id: number | null;
+    rating: number | null;
 
 }
 
@@ -35,6 +36,7 @@ export interface MovieDetails {
     poster_url: string;
     summary: string;
     tmdb_id: number | null;
+    rating: number | null;
 }
 
 

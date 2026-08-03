@@ -33,6 +33,10 @@ class MovieResult(BaseModel):
     title:   str
     score:   Optional[float] = None   # prediction score from the model
     movie_id: Optional[int]  = None
+    rating: float | None = None
+
+
+
 
 class MovieDetails(BaseModel):
     '''Returned by GET /movie/{movie_id}/details
@@ -41,6 +45,7 @@ class MovieDetails(BaseModel):
     poster_url: str
     summary: str
     tmdb_id: Optional[int] = None
+    rating: float | None = None
 
 class RecommendResponse(BaseModel):
     raw_id: int

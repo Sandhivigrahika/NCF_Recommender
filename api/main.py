@@ -153,6 +153,7 @@ async def movie_details(movie_id: int):
         poster_url=details["poster_url"],
         summary=details["summary"],
         tmdb_id=details["tmdb_id"],
+        rating = details["rating"]
     )
 
 # ── Ratings ───────────────────────────────────────────────────────
