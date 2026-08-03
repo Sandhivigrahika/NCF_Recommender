@@ -133,7 +133,7 @@ async def get_movie_details(movie_title: str) -> dict:
     if TMDB_API_KEY:
         try:
             clean, year = _clean_title(movie_title)
-            params = {"params": TMDB_API_KEY, "query": clean}
+            params = {"api_key": TMDB_API_KEY, "query": clean}
             if year:
                 params["year"] = year
             async with httpx.AsyncClient(timeout=10.0) as client: #this creates an http client with httpx
