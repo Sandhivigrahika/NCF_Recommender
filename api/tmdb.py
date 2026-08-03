@@ -4,6 +4,7 @@ import httpx
 from dotenv import load_dotenv
 from groq import Groq
 from fastapi import HTTPException
+import re
 
 
 
@@ -17,6 +18,19 @@ PLACEHOLDER  = "https://placehold.co/500x750/1a1a2e/ffffff?text=No+Poster"
 
 groq_client = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
 
+
+
+def _clean_title(raw: str) -> tuple[str, str | None]:
+    """MovieLens 'Matrix, The (1999)' -> ('The Matrix', '1999') for TMDB search."""
+    year = None
+    m = re.search(r"\((\d{4})\)\s*$", raw)
+    if m:
+        year = m.group(1)
+        raw = raw[:m.start()].strip()
+    m = re.match(r"^(.*),\s+(The|A|An)$", raw)   # 'Matrix, The' -> 'The Matrix'
+    if m:
+        raw = f"{m.group(2)} {m.group(1)}"
+    return raw.strip(), year
 
 #----- Groq summary -------------------------------------------------
 """
@@ -118,13 +132,14 @@ async def get_movie_details(movie_title: str) -> dict:
     #step 1: fetch poster from TMDB (async) ------------------
     if TMDB_API_KEY:
         try:
+            clean, year = _clean_title(movie_title)
+            params = {"params": TMDB_API_KEY, "query": clean}
+            if year:
+                params["year"] = year
             async with httpx.AsyncClient(timeout=10.0) as client: #this creates an http client with httpx
                 resp = await client.get(
                     "https://api.themoviedb.org/3/search/movie",
-                    params={"api_key": TMDB_API_KEY, "query": movie_title},
-
-
-
+                    params=params,
                 )
 
                 resp.raise_for_status() #this checks for errors -> did the request succeed
@@ -141,6 +156,7 @@ async def get_movie_details(movie_title: str) -> dict:
                         poster_url = f"https://image.tmdb.org/t/p/w500{poster}" #build the poster url
         except httpx.HTTPError as e:
             logger.error("TMDB request failed for '%s': %s", movie_title, e)
+
 
             raise HTTPException(
                 status_code=503,
