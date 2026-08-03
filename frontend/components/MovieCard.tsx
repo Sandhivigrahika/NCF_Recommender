@@ -1,16 +1,16 @@
 "use client";
- 
+
 import { useEffect, useState } from "react";
 import { getMovieDetails, MovieDetails, MovieResult } from "@/lib/api";
- 
+
 interface Props {
   movie: MovieResult;
 }
- 
+
 export default function MovieCard({ movie }: Props) {
   const [details, setDetails] = useState<MovieDetails | null>(null);
   const [loading, setLoading] = useState(true);
- 
+
   useEffect(() => {
     if (!movie.movie_id) return;
     getMovieDetails(movie.movie_id)
@@ -18,9 +18,17 @@ export default function MovieCard({ movie }: Props) {
       .catch(() => setDetails(null))
       .finally(() => setLoading(false));
   }, [movie.movie_id]);
- 
-  const scorePercent = movie.score ? Math.round(movie.score * 100) : null;
- 
+
+  // Only treat score as a "match %" when it's a genuine 0–1 model output
+  // (personalised /recommend). Popular/genre results carry a 1–5 avg_rating,
+  // which must NOT be shown as a percentage.
+  const isMatch = movie.score != null && movie.score >= 0 && movie.score <= 1;
+  const scorePercent = isMatch ? Math.round(movie.score! * 100) : null;
+
+  // TMDB community rating, 0–10. Arrives with the details fetch.
+  const rating = details?.rating ?? null;
+  const showRating = rating != null && rating > 0;
+
   return (
     <div style={{
       backgroundColor: "#18181b",
@@ -53,27 +61,30 @@ export default function MovieCard({ movie }: Props) {
             }}
           />
         )}
- 
-        {/* Score badge */}
-        {scorePercent !== null && (
+
+        {/* Rating badge (TMDB) */}
+        {showRating && (
           <div style={{
             position: "absolute", top: "8px", right: "8px",
             backgroundColor: "rgba(0,0,0,0.85)",
-            color: "#34d399",
+            color: "#fbbf24",
             fontSize: "11px",
             fontWeight: 700,
             padding: "2px 8px",
             borderRadius: "9999px",
-            border: "1px solid rgba(52,211,153,0.3)",
+            border: "1px solid rgba(251,191,36,0.3)",
+            display: "flex",
+            alignItems: "center",
+            gap: "3px",
           }}>
-            {scorePercent}%
+            ★ {rating!.toFixed(1)}
           </div>
         )}
       </div>
- 
+
       {/* Info */}
       <div style={{ padding: "0.875rem" }}>
- 
+
         {/* Title */}
         <h3 style={{
           color: "white",
@@ -88,8 +99,8 @@ export default function MovieCard({ movie }: Props) {
         }}>
           {movie.title}
         </h3>
- 
-        {/* Score bar */}
+
+        {/* Match bar — only for personalised results (genuine 0–1 score) */}
         {scorePercent !== null && (
           <div style={{ marginBottom: "0.625rem" }}>
             <div style={{ display: "flex", justifyContent: "space-between", fontSize: "10px", color: "#71717a", marginBottom: "3px" }}>
@@ -101,7 +112,7 @@ export default function MovieCard({ movie }: Props) {
             </div>
           </div>
         )}
- 
+
         {/* Summary */}
         <p style={{
           color: "#a1a1aa",
