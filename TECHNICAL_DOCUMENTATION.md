@@ -1,281 +1,294 @@
-# 🎬 Neural Collaborative Filtering Recommender System: Technical Documentation
+# 🎬 Neural Collaborative Filtering Recommender — Technical Documentation
 
-This document provides an in-depth technical analysis of the **Neural Collaborative Filtering (NCF / NeuMF)** Recommender System. It details the system's machine learning architecture, engineering design decisions, production trade-offs, database schemas, and API design.
+A full-stack movie recommender built on the **Neural Collaborative Filtering (NeuMF)** architecture, trained on MovieLens 1M and deployed live on free-tier infrastructure. This document walks through the architecture, the machine-learning model, the key engineering decisions (and why they were made), the API and data design, and what a production version would do differently.
+
+The defining decision in this project is that **the model is served without any deep-learning framework in memory** — the trained network's forward pass is reimplemented in pure NumPy. That single choice is what lets a TensorFlow-trained recommender run inside a 512 MB free-tier container. Most of this document explains how and why.
 
 ---
 
-## 📌 System Architecture Overview
+## 📌 System at a Glance
 
-The system is designed as a decoupled, microservices-ready recommendation application comprising:
-1. **Next.js Frontend**: A modern client dashboard built with React and TypeScript, enabling user registration, movie rating flows, and real-time recommendation displays.
-2. **FastAPI Backend Service**: A lightweight, high-performance API that serves recommendations, stores ratings feedback in an SQLite database, and orchestrates async movie metadata fetching.
-3. **NumPy Inference Engine**: A custom, TensorFlow-free implementation of the NeuMF forward pass that handles real-time online predictions in milliseconds.
-4. **Offline Training Pipeline**: A Jupyter-based training notebook where the full NeuMF model is compiled, trained on the MovieLens 1M dataset, and exported for weight extraction.
+The system is split into four parts, each with a clear job:
+
+1. **Next.js frontend** — a React/TypeScript dashboard for browsing recommendations, rating movies, and viewing model metrics.
+2. **FastAPI backend** — serves recommendations from the NumPy engine, stores ratings in a database, and enriches results with posters and AI summaries.
+3. **NumPy inference engine** — a framework-free reimplementation of the NeuMF forward pass; this is what actually scores movies in production.
+4. **Offline training pipeline** — a Jupyter notebook where the full model is trained in TensorFlow/Keras and its weights are exported for the engine to use.
+
+The important architectural idea: **training and serving are deliberately separated.** Training is heavy, occasional, and framework-dependent. Serving is light, constant, and framework-free. They are connected only by a folder of exported weight files.
 
 ```mermaid
 graph TD
-    %% Frontend Client
     subgraph Frontend [Next.js Client]
-        UI[React UI Dashboard]
-        RF[Rating Flow Component]
+        UI[React Dashboard]
+        RF[Rating Flow]
     end
 
-    %% FastAPI Service
     subgraph Backend [FastAPI Service]
         API[FastAPI Endpoints]
-        DB[(SQLite DB: ratings.db)]
+        DB[(Database: ratings + retrain log)]
         NP[NumPy Inference Engine]
     end
 
-    %% External APIs
     subgraph External [External Services]
-        TMDB[TMDB API: Movie Posters]
-        Groq[Groq Llama-3.1 API: AI Summaries]
+        TMDB[TMDB API — posters + ratings]
+        Groq[Groq Llama-3.1 — AI summaries]
     end
 
-    %% Offline Pipeline
-    subgraph Offline [Offline Training Pipeline]
-        Notebook[Jupyter Notebook / PyTorch / TF]
+    subgraph Offline [Offline Pipeline — run locally]
+        Notebook[Jupyter Notebook — TensorFlow/Keras training]
         Extract[extract_weights.py]
     end
 
-    %% Mappings & Weights
     Weights[(api/weights/*.npy)]
-    DataFiles[(model/*.pkl & *.dat)]
+    DataFiles[(model/*.pkl and *.dat — ID maps + metadata)]
 
-    %% Connections
-    UI -->|1. Register / Get Recs| API
-    RF -->|2. Rate Movies| API
-    API -->|3. Save Feedback| DB
-    API -->|4. NumPy Forward Pass| NP
-    NP -->|5. Load Weights| Weights
-    API -->|6. Async Detail Fetch| TMDB
-    API -->|6. Async Detail Fetch| Groq
-    
-    %% Training flow
-    Notebook -->|Train Model| Extract
-    Extract -->|Export Arrays| Weights
-    DataFiles -->|Mappers & Metadata| API
+    UI -->|register / get recommendations| API
+    RF -->|rate movies| API
+    API -->|save feedback| DB
+    API -->|forward pass| NP
+    NP -->|load weights| Weights
+    API -->|async detail fetch| TMDB
+    API -->|async detail fetch| Groq
+
+    Notebook -->|train model| Extract
+    Extract -->|export .npy arrays| Weights
+    DataFiles -->|ID maps + metadata| API
 ```
 
 ---
 
-## 🧠 Neural Collaborative Filtering (NeuMF) Deep Dive
+## 🧠 The Model: Neural Collaborative Filtering (NeuMF)
 
-This project implements the **Neural Matrix Factorization (NeuMF)** architecture introduced by **He et al. (WWW 2017)**. 
+This project implements the **NeuMF** architecture from *He et al., "Neural Collaborative Filtering" (WWW 2017)*.
 
-### 1. Mathematical Formulation
+### Why not plain matrix factorization?
 
-Traditional Matrix Factorization (MF) models the user-item interaction as a linear dot product of latent vectors, which restricts its ability to capture complex, non-linear relationships. NeuMF resolves this by combining a linear **Generalized Matrix Factorization (GMF)** branch with a non-linear **Multi-Layer Perceptron (MLP)** branch.
+Classic matrix factorization scores a user–item pair with a **dot product** of their latent vectors. That is a purely linear operation — it can only capture interactions that are, in effect, weighted sums. NeuMF keeps that linear signal but adds a neural branch that can learn non-linear interaction patterns, then fuses the two.
+
+Concretely, every prediction flows through **two parallel branches** that are combined at the end:
 
 ```
-                      Output Score (\hat{y}_{ui})
-                                  ▲
-                                  │  [Sigmoid Layer]
-                           Fused Layer (48)
-                                  ▲
-                  ┌───────────────┴───────────────┐
-                  │ [Concat]                      │ [Concat]
-               GMF (32)                        MLP (16)
-                  ▲                               ▲
-                  │ [Element-wise Product]        │ [Dense ReLU Stack]
-            ┌─────┴─────┐                   ┌─────┴─────┐
-      GMF User    GMF Item            MLP User    MLP Item
-     Embedding   Embedding           Embedding   Embedding
-        (32)        (32)                (32)        (32)
-          ▲           ▲                   ▲           ▲
-          │           │                   │           │
-       User ID     Item ID             User ID     Item ID
+                        Predicted score  ŷ(u,i)
+                                 ▲
+                                 │  sigmoid
+                          Fused vector (48)
+                                 ▲
+                 ┌───────────────┴───────────────┐
+              GMF branch (32)                MLP branch (16)
+                 ▲                               ▲
+        element-wise product              ReLU dense stack
+          ┌──────┴──────┐                 ┌──────┴──────┐
+      GMF user      GMF item          MLP user     MLP item
+      embedding     embedding         embedding    embedding
+        (32)          (32)              (32)          (32)
 ```
 
-#### The GMF Branch (Linear Layer)
-GMF projects users and items into a shared latent space. It performs an element-wise product (Hadamard product) of the GMF user embedding $\mathbf{p}_u^G$ and the GMF item embedding $\mathbf{q}_i^G$:
+Each user and each item has **four** learned vectors — one pair for each branch. A single prediction pulls all four.
 
-$$\phi^{GMF} = \mathbf{p}_u^G \odot \mathbf{q}_i^G$$
+### The GMF branch (linear)
 
-#### The MLP Branch (Non-Linear Layers)
-MLP concatenates the user embedding $\mathbf{p}_u^M$ and item embedding $\mathbf{q}_i^M$ to capture high-order interaction patterns:
+Takes the GMF user and item vectors and multiplies them **element-wise** (the Hadamard product):
 
-$$\mathbf{z}_1 = [\mathbf{p}_u^M, \mathbf{q}_i^M]$$
+$$\phi^{GMF} = \mathbf{p}_u^{G} \odot \mathbf{q}_i^{G}$$
 
-$$\phi_l^{MLP} = a(\mathbf{W}_l^T \phi_{l-1}^{MLP} + \mathbf{b}_l), \quad l \in [2, L]$$
+This captures dimension-by-dimension alignment between a user's taste and an item's traits. Output: a 32-dimensional vector.
 
-Where:
-* $a$ represents the **ReLU** activation function.
-* $\mathbf{W}_l$ and $\mathbf{b}_l$ are the weight matrix and bias vector for layer $l$.
-* The MLP dense stack architecture uses a typical tower design: $64 \rightarrow 32 \rightarrow 16$ units.
+### The MLP branch (non-linear)
 
-#### Fusion Layer (NeuMF)
-The outputs of the two branches are concatenated to form the final representation layer, which is passed to the output layer:
+**Concatenates** the MLP user and item vectors into one 64-dimensional vector, then passes it through a stack of dense layers with ReLU activations, narrowing $64 \rightarrow 32 \rightarrow 16$:
 
-$$\phi^{NeuMF} = [\phi^{GMF}, \phi^{MLP}]$$
+$$\mathbf{z}_1 = [\,\mathbf{p}_u^{M},\; \mathbf{q}_i^{M}\,]$$
+$$\phi_l = \text{ReLU}(\mathbf{W}_l^{\top}\phi_{l-1} + \mathbf{b}_l)$$
 
-$$\hat{y}_{ui} = \sigma(\mathbf{h}^T \phi^{NeuMF})$$
+This learns higher-order interactions the GMF branch structurally cannot. Output: a 16-dimensional vector.
 
-Where $\sigma(x) = \frac{1}{1 + e^{-x}}$ is the **Sigmoid** activation function, predicting the probability of interaction.
+### Fusion
 
-### 2. Dataset and Preprocessing
-The model is trained on the **MovieLens 1M dataset**:
-* **Data Scale**: 1,000,209 ratings across 6,040 users and 3,900 movies.
-* **Implicit Feedback Conversion**: Ratings are binarized to implicit feedback (1 indicating the user has rated the item, 0 representing negative samples).
-* **Negative Sampling**: For each positive interaction, 4 negative samples (unrated movies) are randomly generated to train the binary classifier.
+The two branch outputs are **concatenated** (GMF first, then MLP → 32 + 16 = 48 dimensions), passed through one final dense layer, and squashed by a sigmoid into a 0–1 interaction probability:
+
+$$\phi^{NeuMF} = [\,\phi^{GMF},\; \phi^{MLP}\,], \qquad \hat{y}_{ui} = \sigma(\mathbf{h}^{\top}\phi^{NeuMF})$$
+
+That final number is the recommendation score — higher means a stronger predicted match.
+
+### Dataset and training setup
+
+Trained on **MovieLens 1M**: 1,000,209 ratings from 6,040 users. Note that user and item IDs are remapped to a dense internal index space; the served item space is **13,706 items** and the user embedding table is sized at **16,040** (see *Dynamic User Registration* below for why it is larger than 6,040).
+
+- **Implicit feedback**: explicit star ratings are binarized — an observed interaction is a positive (1), and unobserved user–item pairs are the negative class (0).
+- **Negative sampling**: for each positive interaction, several unobserved items are sampled as negatives so the model learns to rank seen items above unseen ones.
+
+### A note on evaluation numbers
+
+The `/metrics` endpoint reports **Hit@10** and **NDCG@10** via leave-one-out evaluation. These land below the headline figures in the original paper, and the reason is **methodology, not a shrunken model** — the architecture here uses the standard 32-dimensional embeddings and the standard $64\rightarrow32\rightarrow16$ MLP.
+
+The gap comes from two honest differences: the paper **pretrains** the GMF and MLP branches separately and then fine-tunes the fused model, and it uses a heavier negative-sampling regime. This implementation trains the fused model **end-to-end in a single pass** and evaluates over a 100-candidate leave-one-out protocol. The result is a lower but legitimate baseline — the number reflects the training/eval choices, and closing the gap is a matter of adding branch pretraining (noted in *Future Work*).
 
 ---
 
-## ⚙️ Engineering Trade-offs & Production Design
+## ⚙️ The Core Engineering Decision: Framework-Free Serving
 
-### 💡 The Core Challenge: Deployment Resource Constraints
+### The problem
 
-In a standard machine learning web service, model serving is done by wrapping a framework like **TensorFlow** or **PyTorch** in a REST API. However, doing so introduces severe production limitations:
+The default way to serve a model is to wrap TensorFlow (or PyTorch) in a REST API. For a small free-tier deployment, that path breaks down:
 
-1. **Massive Footprint**: The TensorFlow wheel is **over 500MB**, which quickly bloats Docker images to over 1.5GB.
-2. **Memory Constraints**: The free tier of hosting platforms (such as Render) imposes a strict **512MB RAM** limit. Loading TensorFlow and holding its internal graph structure in memory immediately causes containers to trigger Out-Of-Memory (OOM) exceptions and crash.
-3. **Cold Start Overhead**: Importing TensorFlow at runtime adds 5 to 10 seconds to service startup time, causing request timeouts during scale-up.
+1. **Image size** — the TensorFlow wheel alone is ~500 MB and pushes a Docker image well past 1 GB.
+2. **Memory** — free tiers cap at **512 MB RAM**. Loading TensorFlow plus its graph state can exhaust that on startup and the container is killed (OOM) before it serves a single request.
+3. **Cold start** — simply *importing* TensorFlow takes many seconds, which on a tier that sleeps when idle means the first request after a wake can time out.
 
-### 🛠️ The Solution: Custom NumPy Inference Engine
+These are not tuning problems. They are structural costs of keeping a training framework in the serving path.
 
-Since the online API only requires the model for *inference* (predicting recommendation scores for a given user against all candidate items), we can completely bypass TensorFlow in production. 
+### The insight
 
-We decouple the pipeline as follows:
-* **Offline Training**: TensorFlow/Keras is used to train the model, tune hyperparameters, and evaluate performance.
-* **Weight Extraction**: A utility script ([extract_weights.py](file:///c:/Users/neelh/Jupyter%20Related/NeuMFRec/api/extract_weights.py)) runs once locally, extracting the model's 12 internal weight matrices and biases directly from the `.h5` model file, saving them as serialized NumPy `.npy` files.
-* **Pure NumPy Serving**: In production, the API imports [ncf_numpy.py](file:///c:/Users/neelh/Jupyter%20Related/NeuMFRec/api/ncf_numpy.py) to run the exact NeuMF forward pass using only basic matrix multiplications.
+The API never trains. It only ever runs the model **forward** — take a user and a set of items, produce scores. And a forward pass for a *fixed, known* architecture is just arithmetic: four array lookups, an element-wise product, three small matrix multiplies with ReLU, a concatenation, and a sigmoid. None of that needs a deep-learning framework — it needs NumPy.
 
-#### Weight Extraction Spec (`extract_weights.py`)
-The weights are extracted and validated against these expected dimensions:
-* **GMF User Embeddings**: `(16040, 32)`
-* **GMF Item Embeddings**: `(13706, 32)`
-* **MLP User Embeddings**: `(16040, 32)`
-* **MLP Item Embeddings**: `(13706, 32)`
-* **MLP Layer 0 (dense)**: Kernel `(64, 64)`, Bias `(64,)`
-* **MLP Layer 1 (dense_1)**: Kernel `(64, 32)`, Bias `(32,)`
-* **MLP Layer 2 (dense_2)**: Kernel `(32, 16)`, Bias `(16,)`
-* **NeuMF Output (dense_3)**: Kernel `(48, 1)`, Bias `(1,)`
+So the framework is used where it earns its keep (training) and removed where it only costs (serving).
 
-#### Custom Forward Pass in NumPy (`ncf_numpy.py`)
-The entire deep neural network's forward pass is written in pure NumPy as follows:
+### The pipeline
+
+- **Offline (local, in TensorFlow):** train the model, evaluate, tune.
+- **`extract_weights.py` (runs once):** open the trained `.h5`, pull out the 12 weight arrays by layer name, and save each as a `.npy` file. This is the *only* time TensorFlow touches the serving artifacts.
+- **`ncf_numpy.py` (in production):** load those 12 arrays and run the exact forward pass in pure NumPy. No TensorFlow import anywhere in the serving process.
+
+The 12 extracted arrays, validated on extraction against their expected shapes:
+
+| Component | Shape |
+|---|---|
+| GMF user embedding | (16040, 32) |
+| GMF item embedding | (13706, 32) |
+| MLP user embedding | (16040, 32) |
+| MLP item embedding | (13706, 32) |
+| Dense 0 — kernel / bias | (64, 64) / (64,) |
+| Dense 1 — kernel / bias | (64, 32) / (32,) |
+| Dense 2 — kernel / bias | (32, 16) / (16,) |
+| Output — kernel / bias | (48, 1) / (1,) |
+
+### The forward pass in NumPy
 
 ```python
-import numpy as np
-
 def score(user_ids: np.ndarray, item_ids: np.ndarray) -> np.ndarray:
-    # 1. Row Indexing (Embedding Table Lookup)
+    # 1. Embedding lookups — pure array indexing
     gmf_u = _W["gmf_user_emb"][user_ids]
     gmf_i = _W["gmf_item_emb"][item_ids]
     mlp_u = _W["mlp_user_emb"][user_ids]
     mlp_i = _W["mlp_item_emb"][item_ids]
 
-    # 2. Generalized Matrix Factorization Branch
-    gmf = gmf_u * gmf_i  # Hadamard product
+    # 2. GMF branch — element-wise (Hadamard) product
+    gmf = gmf_u * gmf_i
 
-    # 3. Multi-Layer Perceptron Branch
-    mlp_in = np.concatenate([mlp_u, mlp_i], axis=1)
-    
-    # Layer 1
-    x = np.maximum(0.0, mlp_in @ _W["dense_kernel"] + _W["dense_bias"])
-    # Layer 2
+    # 3. MLP branch — concat, then ReLU dense stack (64 -> 32 -> 16)
+    x = np.concatenate([mlp_u, mlp_i], axis=1)
+    x = np.maximum(0.0, x @ _W["dense_kernel"]   + _W["dense_bias"])
     x = np.maximum(0.0, x @ _W["dense_1_kernel"] + _W["dense_1_bias"])
-    # Layer 3
     x = np.maximum(0.0, x @ _W["dense_2_kernel"] + _W["dense_2_bias"])
 
-    # 4. Concatenation / Fusion Layer
+    # 4. Fuse: GMF (32) then MLP (16) -> 48
     neu = np.concatenate([gmf, x], axis=1)
 
-    # 5. Sigmoid Output Layer
+    # 5. Output + sigmoid
     logit = neu @ _W["dense_3_kernel"] + _W["dense_3_bias"]
-    return 1.0 / (1.0 + np.exp(-logit)).ravel()
+    return (1.0 / (1.0 + np.exp(-logit))).ravel()
 ```
 
-### 📈 Comparison & Trade-off Summary
+### Correctness: proven, not assumed
 
-| Metric | TensorFlow Keras serving | NumPy Serving (Our Choice) |
-| :--- | :--- | :--- |
-| **Package Size** | ~500 MB (TensorFlow wheel) | ~20 MB (NumPy & serialized weight files) |
-| **Memory Footprint** | ~350 MB RAM at idle | **~15 MB RAM** at idle |
-| **Warmup Startup Time** | 5.2 seconds | **0.15 seconds** |
-| **Scoring Performance** | ~18ms / batch | ~3ms / batch |
-| **Limitations** | Enables online retraining on API nodes. | Online retraining must be delegated to offline background tasks. |
+A reimplementation is only trustworthy if it matches the original. Before TensorFlow was removed from serving, a verification script scored the same random (user, item) pairs with both the TensorFlow model and the NumPy engine and compared them. They agree to within **~1e-8** — floating-point noise. That check is what makes it safe to delete the framework: the NumPy engine is not an approximation, it is the same function.
+
+### The measured payoff
+
+Benchmarked locally, 100 runs, single-threaded:
+
+| Metric | NumPy engine | TensorFlow |
+|---|---|---|
+| Startup (import + model load) | **~5 ms** | ~16,500 ms |
+| Score full catalog (13,706 items) — `/recommend` | **~12 ms** | ~500 ms |
+| Score 100 candidates — per user in `/metrics` | **~0.14 ms** | ~61 ms |
+| Weights resident in memory | **7.6 MB** | — |
+| Serving image size | ~150 MB | ~1.5 GB |
+
+The NumPy engine is faster on every axis — and it is worth being precise about *why*, because the reason is not "NumPy beats TensorFlow at matrix math." It doesn't. The difference is that `model.predict()` carries per-call overhead — input validation, graph execution machinery, batching logic — that is sized for large batched training and dominates when you score a single user against the catalog. Reimplementing only the forward pass strips that overhead away. Combined with dropping the ~500 MB framework from the image, this is precisely what lets the service boot near-instantly and fit inside 512 MB.
+
+The honest framing: raw scoring speed was never the goal — 12 ms is far faster than any user notices. The goal was **footprint and startup**, and those are what make free-tier deployment possible at all.
 
 ---
 
 ## ⚡ Dynamic User Registration & Embedding Buffers
 
-### The Problem: Fixed-shape Embeddings
-Recommender models use embedding matrices of fixed dimensions: `(NumUsers, EmbeddingDim)`. If the model is compiled with `NumUsers = 6040`, registering user `6041` and looking them up during inference causes an `IndexError` because the index exceeds the embedding matrix boundaries.
+### The problem: embeddings are fixed-size
 
-### The Solution: Pre-allocated Embedding Buffers
-To resolve this without needing to re-compile or dynamically resize TensorFlow layers in real-time, we allocate a **buffer zone** when initially training the model:
+An embedding table has a fixed shape `(num_users, embedding_dim)`. If it is built for 6,040 users, asking for user 6,041 is an out-of-bounds index — the model cannot grow to accommodate a new sign-up at serving time, because the weight matrix is a fixed tensor baked into the trained model.
 
-```python
-# During Offline Model Training:
-num_original_users = 6040
-BUFFER_SIZE = 10000
-user_embedding_layer = Embedding(input_dim=num_original_users + BUFFER_SIZE, output_dim=32)
-```
+### The solution: reserve seats in advance
 
-1. **Buffer Indexing**: The first 6,040 rows `[0 to 6039]` are trained on MovieLens users. The rows from `[6040 to 16039]` are reserved seats initialized to small random values.
-2. **Live Registration**: When a new user registers via `/register`, we assign them the next available buffer slot:
-   ```python
-   new_internal_id = max(_user2id.values()) + 1
-   _user2id[new_raw_id] = new_internal_id
-   ```
-3. **Zero-Crash Serving**: Since the index exists within the pre-allocated weights matrix, the NumPy engine executes without errors. The initial predictions represent general collaborative filtering trends before the user gets their own fine-tuned representation.
-4. **Offline Retraining**: The user's newly submitted ratings are saved locally. During scheduled offline retraining, these weights are updated using backpropagation to adapt specifically to the new user's preferences.
+During training, the embedding tables are deliberately sized **larger** than the known user count — 6,040 real users plus a buffer, for 16,040 rows total. Rows `[0, 6039]` are trained on real MovieLens users; rows `[6040, 16039]` are untrained "reserved seats" holding small random values.
+
+1. **Registration** — a new user is assigned the next free buffer slot via `/register`.
+2. **Zero-crash serving** — because the slot already exists in the matrix, the NumPy engine scores the new user without error. Their initial recommendations reflect the untrained (near-random) embedding, so in practice new users are best served **cold-start popular results** until their embedding is trained.
+3. **Learning their taste** — the user's ratings are stored, and a later offline retrain updates their reserved slot to reflect their actual preferences.
+
+This is a pragmatic way to support live sign-ups on a model whose shape is otherwise frozen — trading a block of pre-allocated memory for the ability to onboard users without retraining the whole network on the spot.
 
 ---
 
-## 📡 API Design & Decoupled Latency Optimization
+## 📡 API Design
 
-The backend is built with FastAPI. It leverages database indexing and asynchronous routines to optimize API response times.
+Built with FastAPI. The central design principle is **decoupling the fast path from the slow path.**
 
-### Key API Endpoints
+### The fast path vs. the slow path
 
-#### 1. User Registration: `POST /register`
-Creates or retrieves a unique user mapping.
-* **Payload**: `{"name": "Alice"}`
-* **Response**:
-  ```json
-  {
-    "internal_id": 6041,
-    "raw_id": 6041,
-    "is_new": true,
-    "message": "Welcome!"
-  }
-  ```
+`/recommend` must be quick, so it does the minimum: map the user ID, run the NumPy forward pass over all candidate items, drop already-seen movies, and return titles and IDs. It makes **no external calls** — no posters, no LLM, no network.
 
-#### 2. Get Recommendations: `POST /recommend`
-Computes top-N personalized movie recommendations.
-* **Payload**: `{"user_id": 6041, "top_n": 10}`
-* **Decoupled Architecture**: 
-  To achieve sub-10ms response times, this endpoint **only** maps user IDs, runs the NumPy forward pass, filters out previously rated movies, and returns raw titles and IDs. It **does not** fetch images, make external HTTP requests, or query LLMs.
+Enrichment (posters, AI summaries) is expensive and lives in a **separate** per-movie endpoint the frontend calls afterward, once per card, in parallel. A slow TMDB or Groq response therefore delays a single poster, never the recommendation list itself.
 
-#### 3. Fetch Movie Details: `GET /movie/{movie_id}/details`
-Fetches rich metadata for a recommended movie card.
-* **Flow**:
-  1. Instant local database lookup for the movie title.
-  2. Async call to **TMDB API** (using `httpx.AsyncClient`) to fetch the movie poster URL.
-  3. Send the TMDB overview text to the **Groq API** running `llama-3.1-8b-instant` to generate a personalized, 2-sentence recommendation summary.
-* **Response**:
-  ```json
-  {
-    "movie_id": 1,
-    "title": "Toy Story (1995)",
-    "poster_url": "https://image.tmdb.org/t/p/w500/uXDfjJbdJy4VJj5ugl356LHN0ja.jpg",
-    "summary": "Join Woody and Buzz on an adventure of friendship and imagination. Perfect for anyone who loves heart-warming animation.",
-    "tmdb_id": 862,
-    "rating": 7.97
-  }
-  ```
-* **Latency Optimization**: The Next.js frontend calls this endpoint asynchronously *per card* in the UI grid after receiving the initial list from `/recommend`. This ensures that slow TMDB or Groq timeouts never block the core recommendation payload.
+### Endpoints
+
+**`POST /register`** — create or fetch a user by name.
+```json
+{ "internal_id": 6041, "raw_id": 6041, "is_new": true, "message": "Welcome!" }
+```
+
+**`POST /recommend`** — top-N personalized recommendations. Fast path: forward pass + filtering only. Payload `{"user_id": 6041, "top_n": 10}`.
+
+**`POST /popular`** — cold-start recommendations by popularity/genre, for new users without a trained embedding.
+
+**`GET /movie/{movie_id}/details`** — enrichment for one card:
+1. local title lookup (instant),
+2. async TMDB call for poster + community rating,
+3. Groq `llama-3.1-8b-instant` for a 2-sentence summary grounded in the TMDB overview.
+```json
+{
+  "movie_id": 1,
+  "title": "Toy Story (1995)",
+  "poster_url": "https://image.tmdb.org/t/p/w500/....jpg",
+  "summary": "Woody and Buzz lead a story of friendship and imagination — a warm pick for animation lovers.",
+  "tmdb_id": 862,
+  "rating": 7.97
+}
+```
+
+**`GET /metrics`** — Hit@K and NDCG@K via leave-one-out evaluation, computed with the same NumPy engine that serves recommendations.
+
+**`POST /rate`** — store a user's rating; ratings accumulate for the offline retrain job.
+
+**`POST /retrain`** — returns **501 Not Implemented** by design: retraining is an offline batch job in this deployment (see below), not an on-demand API action.
+
+---
+
+## 🔁 Retraining: An Offline Batch Job
+
+Retraining is intentionally **not** an online operation here, and this is a direct consequence of the framework-free serving decision.
+
+Retraining requires TensorFlow — but TensorFlow was deliberately removed from the serving container. So retraining runs **offline**: accumulated ratings are pulled from the database, the model is fine-tuned in TensorFlow locally, the weights are re-exported with `extract_weights.py`, and the new `.npy` folder is redeployed.
+
+This mirrors how many real recommender systems actually operate — models retrain on a **schedule** (nightly/weekly), not on every user action. The `/retrain` endpoint returns 501 and the UI explains the offline design rather than pretending an on-demand retrain happens. It is an honest reflection of the train/serve split, not a missing feature.
 
 ---
 
 ## 💾 Database Schema
 
-The database uses SQLite (via SQLAlchemy) to store persistent ratings and log retraining metrics.
+SQLAlchemy over a relational database, storing submitted ratings and a log of retraining runs.
 
-### 1. `ratings` Table
-Stores user ratings submitted via the UI.
+**`ratings`** — feedback submitted through the UI:
 ```sql
 CREATE TABLE ratings (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -289,8 +302,7 @@ CREATE TABLE ratings (
 CREATE INDEX ix_ratings_user_id ON ratings(user_id);
 ```
 
-### 2. `retraining_history` Table
-Logs all historical retraining updates executed offline.
+**`retraining_history`** — one row per offline retrain run, surfaced in the UI's activity view:
 ```sql
 CREATE TABLE retraining_history (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -304,49 +316,73 @@ CREATE TABLE retraining_history (
 );
 ```
 
----
-
-## 🖥️ Next.js Frontend Client
-
-The frontend client is implemented in Next.js using React hooks and functional component design:
-
-* **Rating Flow Component ([RatingFlow.tsx](file:///c:/Users/neelh/Jupyter%20Related/NeuMFRec/frontend/components/RatingFlow.tsx))**: Operates as a dynamic wizard. When a new user registers, they are presented with 5 popular movies. They must rate these movies (positive/negative clicks) to feed initial training data into the backend database.
-* **Metrics Panel ([MetricsPanel.tsx](file:///c:/Users/neelh/Jupyter%20Related/NeuMFRec/frontend/components/MetricsPanel.tsx))**: Renders Hit@K (Hit Ratio) and NDCG@K (Normalized Discounted Cumulative Gain) metrics dynamically generated by the API's evaluation loop (`/metrics`), giving engineers visibility into model quality.
-* **Component-Level Async Fetching**: Keeps the app responsive. Skeletons are shown for movie posters while `MovieCard.tsx` fetches images and summaries from `/movie/{id}/details` in parallel.
+The database URL is environment-driven: it falls back to local SQLite for development and uses managed PostgreSQL in deployment, selected entirely by the `DATABASE_URL` environment variable with no code change.
 
 ---
 
-## 🚀 Setup & Execution Instructions
+## 🖥️ Frontend
 
-### Local Development Setup
+Next.js with React hooks and functional components.
 
-1. **Install Dependencies**:
-   ```bash
-   pip install -r requirements.txt
-   ```
-2. **Environment Variables (`.env.local`)**:
-   Create a `.env.local` file in the project root:
-   ```env
-   TMDB_API_KEY=your_tmdb_api_key
-   GROQ_API_KEY=your_groq_api_key
-   DATA_DIR=./data
-   ```
-3. **Weight Extraction**:
-   If the weights are not extracted, run:
-   ```bash
-   python api/extract_weights.py --model model/ncf_model.h5 --out api/weights
-   ```
-4. **Run the FastAPI Server**:
-   ```bash
-   uvicorn api.main:app --host 127.0.0.1 --port 8000 --reload
-   ```
+- **Discover** — enter an existing user ID for personalized picks, or browse popular movies by genre.
+- **Rating flow** — new users pick a genre and rate movies (shown in batches) so their feedback is collected for the next offline retrain.
+- **Metrics panel** — live Hit@K / NDCG@K from `/metrics`, giving visibility into model quality.
+- **Per-card async enrichment** — each `MovieCard` fetches its poster, TMDB rating, and AI summary independently from `/movie/{id}/details`, showing skeletons while loading. This keeps the grid responsive and isolates any slow external call to a single card.
 
-### Docker Containerization
-The project includes a `Dockerfile` designed for minimal runtime image sizes:
+**A display detail worth noting:** the score shown on a card depends on its source. Personalized results carry a genuine 0–1 model score, shown as a "match %". Popular/genre results carry an average rating, shown as a star rating — never a percentage. This avoids the common bug of rendering a 1–5 rating as "500%".
+
+---
+
+## 🚀 Setup & Deployment
+
+### Local development
+
 ```bash
-# Build the Docker image
-docker build -t neumf-recommender .
+# 1. Install dependencies
+pip install -r requirements.txt
 
-# Run the container
-docker run -p 8000:8000 -e PORT=8000 -e TMDB_API_KEY=your_key -e GROQ_API_KEY=your_key neumf-recommender
+# 2. Environment (.env.local)
+#    TMDB_API_KEY=...
+#    GROQ_API_KEY=...
+#    DATA_DIR=./data
+
+# 3. Extract weights from the trained model (run once)
+python api/extract_weights.py --model model/ncf_model.h5 --out api/weights
+
+# 4. (optional) Verify the NumPy engine matches TensorFlow
+python api/verify_equivalence.py --model model/ncf_model.h5 --weights api/weights
+
+# 5. Run the API
+uvicorn api.main:app --host 127.0.0.1 --port 8000 --reload
 ```
+
+### Docker & deployment
+
+The service is containerized with a Dockerfile written for a minimal, framework-free image. Key production details:
+
+- **Code vs. state separation** — application code lives in a read-only `/app`; all writable state (SQLite fallback, user registry, ratings) goes to a writable `/data` owned by a non-root user, so the container runs unprivileged without permission errors.
+- **Dynamic port** — the server binds to the platform-provided `$PORT` (shell-form `CMD` so the variable expands).
+- **Deployed as:** backend container on **Render** with managed PostgreSQL; Next.js frontend on **Vercel**, pointed at the backend via `NEXT_PUBLIC_API_URL`.
+
+```bash
+docker build -t neumf-recommender .
+docker run -p 8000:8000 -e PORT=8000 -e TMDB_API_KEY=... -e GROQ_API_KEY=... neumf-recommender
+```
+
+---
+
+## 🔭 Future Work
+
+Honest next steps, roughly in order of value:
+
+1. **Close the accuracy gap** — add the paper's GMF/MLP branch pretraining before fusion, and a heavier negative-sampling regime, to lift Hit@10 / NDCG@10 toward the published baseline.
+2. **Automate the offline retrain** — a scheduled job (e.g. nightly) that pulls new ratings, fine-tunes, re-exports weights, and redeploys, closing the loop the current manual process handles.
+3. **Persist retrained weights durably** — free-tier disks are ephemeral; a model registry or object store would let retrained weights survive restarts rather than living in the container.
+4. **Cache `/metrics`** — leave-one-out evaluation is recomputed on request; caching or precomputing it removes avoidable work under load.
+5. **Package the inference engine** — `ncf_numpy.py` is a clean, dependency-light library and is a natural candidate to publish as a standalone pip package, with the trained weights distributed via the Hugging Face Hub.
+
+---
+
+## Summary
+
+The heart of this project is a single, defensible engineering decision: **separate the training runtime from the serving runtime.** Train in TensorFlow where the framework is worth its weight; serve in NumPy where it isn't. The forward pass was reimplemented from the model's architecture, proven identical to the original to 1e-8, and shipped in a container an order of magnitude smaller than a framework-based equivalent — which is what makes the whole system deployable, live, for free.
